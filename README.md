@@ -129,6 +129,3 @@ npm test
 python scripts/benchmark_vector_search.py
 ```
 
-## License
-
-MIT License - see LICENSE file for details.
