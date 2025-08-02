@@ -1,0 +1,506 @@
+# NeuroRAG Vector Search Service Kubernetes Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neurorag-vector-service
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: vector-search
+    version: v1.0.0
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: neurorag-vector-service
+  template:
+    metadata:
+      labels:
+        app: neurorag-vector-service
+        component: vector-search
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Node affinity for high-performance nodes
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-type
+                operator: In
+                values: ["high-performance"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: ["neurorag-vector-service"]
+              topologyKey: kubernetes.io/hostname
+      
+      # Service account for RBAC
+      serviceAccountName: neurorag-vector-service
+      
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      
+      # Init container for index preparation
+      initContainers:
+      - name: index-downloader
+        image: neuroragacr.azurecr.io/neurorag/index-downloader:v1.0.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Downloading FAISS index..."
+          if [ ! -f /data/faiss_index.bin ]; then
+            wget -O /data/faiss_index.bin ${INDEX_DOWNLOAD_URL}
+            wget -O /data/documents.json ${METADATA_DOWNLOAD_URL}
+          fi
+          echo "Index download completed"
+        env:
+        - name: INDEX_DOWNLOAD_URL
+          valueFrom:
+            configMapKeyRef:
+              name: neurorag-config
+              key: index_download_url
+        - name: METADATA_DOWNLOAD_URL
+          valueFrom:
+            configMapKeyRef:
+              name: neurorag-config
+              key: metadata_download_url
+        volumeMounts:
+        - name: vector-data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+      
+      containers:
+      - name: vector-service
+        image: neuroragacr.azurecr.io/neurorag/vector-service:v1.0.0
+        imagePullPolicy: Always
+        
+        ports:
+        - name: http
+          containerPort: 8001
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        
+        env:
+        - name: VECTOR_SERVICE_HOST
+          value: "0.0.0.0"
+        - name: VECTOR_SERVICE_PORT
+          value: "8001"
+        - name: FAISS_INDEX_PATH
+          value: "/data/faiss_index.bin"
+        - name: METADATA_PATH
+          value: "/data/documents.json"
+        - name: VECTOR_DIMENSION
+          valueFrom:
+            configMapKeyRef:
+              name: neurorag-config
+              key: vector_dimension
+        - name: NUM_WORKER_THREADS
+          value: "8"
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: neurorag-secrets
+              key: redis_url
+        - name: USE_GPU
+          value: "false"
+        - name: ENABLE_NUMA
+          value: "true"
+        - name: LOG_LEVEL
+          value: "INFO"
+        
+        # Resource requirements
+        resources:
+          requests:
+            cpu: 2000m
+            memory: 8Gi
+            ephemeral-storage: 10Gi
+          limits:
+            cpu: 4000m
+            memory: 16Gi
+            ephemeral-storage: 20Gi
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        # Startup probe for slow initialization
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        
+        # Volume mounts
+        volumeMounts:
+        - name: vector-data
+          mountPath: /data
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        
+        # Lifecycle hooks
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                echo "Graceful shutdown initiated..."
+                kill -TERM 1
+                sleep 30
+      
+      # Volumes
+      volumes:
+      - name: vector-data
+        persistentVolumeClaim:
+          claimName: neurorag-vector-data
+      - name: config
+        configMap:
+          name: neurorag-vector-config
+      - name: tmp
+        emptyDir: {}
+      
+      # DNS configuration
+      dnsPolicy: ClusterFirst
+      
+      # Restart policy
+      restartPolicy: Always
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: 60
+      
+      # Tolerations for dedicated nodes
+      tolerations:
+      - key: "high-performance"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+
+---
+# Service for vector search
+apiVersion: v1
+kind: Service
+metadata:
+  name: neurorag-vector-service
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: vector-search
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 8001
+    targetPort: http
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: neurorag-vector-service
+  sessionAffinity: None
+
+---
+# Headless service for StatefulSet (if needed)
+apiVersion: v1
+kind: Service
+metadata:
+  name: neurorag-vector-service-headless
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: vector-search
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8001
+    targetPort: http
+    protocol: TCP
+  selector:
+    app: neurorag-vector-service
+
+---
+# Persistent Volume Claim for vector data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: neurorag-vector-data
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: storage
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: azure-files-premium
+
+---
+# ConfigMap for vector service configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neurorag-vector-config
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: config
+data:
+  vector_service.conf: |
+    # NeuroRAG Vector Service Configuration
+    [server]
+    host = 0.0.0.0
+    port = 8001
+    workers = 8
+    
+    [index]
+    path = /data/faiss_index.bin
+    metadata_path = /data/documents.json
+    dimension = 1536
+    
+    [performance]
+    enable_numa = true
+    enable_prefetch = true
+    prefetch_size = 1000
+    batch_size = 32
+    
+    [cache]
+    enabled = true
+    ttl_seconds = 3600
+    max_size = 1000000
+    
+    [monitoring]
+    metrics_enabled = true
+    metrics_port = 9090
+    health_check_interval = 30
+
+---
+# ServiceAccount for RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: neurorag-vector-service
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: rbac
+
+---
+# Role for vector service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: neurorag-vector-service
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding for vector service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: neurorag-vector-service
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: rbac
+subjects:
+- kind: ServiceAccount
+  name: neurorag-vector-service
+  namespace: neurorag
+roleRef:
+  kind: Role
+  name: neurorag-vector-service
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# HorizontalPodAutoscaler for auto-scaling
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: neurorag-vector-service-hpa
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: neurorag-vector-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "1000"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+
+---
+# PodDisruptionBudget for high availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: neurorag-vector-service-pdb
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: availability
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: neurorag-vector-service
+
+---
+# NetworkPolicy for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: neurorag-vector-service-netpol
+  namespace: neurorag
+  labels:
+    app: neurorag-vector-service
+    component: security
+spec:
+  podSelector:
+    matchLabels:
+      app: neurorag-vector-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: neurorag
+    - podSelector:
+        matchLabels:
+          app: neurorag-api-gateway
+    ports:
+    - protocol: TCP
+      port: 8001
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53

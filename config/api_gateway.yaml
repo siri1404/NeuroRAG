@@ -1,0 +1,256 @@
+# NeuroRAG API Gateway Configuration
+
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  
+  # SSL/TLS
+  ssl_enabled: false
+  ssl_cert_path: "/certs/server.crt"
+  ssl_key_path: "/certs/server.key"
+  
+  # Request handling
+  max_request_size: "10MB"
+  request_timeout_seconds: 300
+  keep_alive_timeout: 75
+
+# API Configuration
+api:
+  version: "v1"
+  title: "NeuroRAG API"
+  description: "Enterprise RAG System API"
+  
+  # Documentation
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+  openapi_url: "/openapi.json"
+  
+  # CORS
+  cors_enabled: true
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+    - "https://neurorag.company.com"
+  cors_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+  cors_headers: ["*"]
+
+# Authentication & Authorization
+auth:
+  # JWT Configuration
+  jwt_secret_key: "${JWT_SECRET_KEY}"
+  jwt_algorithm: "HS256"
+  jwt_expiration_hours: 24
+  
+  # API Key Authentication
+  api_key_header: "X-API-Key"
+  api_keys:
+    - name: "admin"
+      key: "${ADMIN_API_KEY}"
+      permissions: ["read", "write", "admin"]
+    - name: "readonly"
+      key: "${READONLY_API_KEY}"
+      permissions: ["read"]
+  
+  # OAuth2 (Optional)
+  oauth2_enabled: false
+  oauth2_provider_url: "https://auth.company.com"
+  oauth2_client_id: "${OAUTH2_CLIENT_ID}"
+  oauth2_client_secret: "${OAUTH2_CLIENT_SECRET}"
+
+# Rate Limiting
+rate_limiting:
+  enabled: true
+  
+  # Global limits
+  global_requests_per_minute: 10000
+  global_requests_per_hour: 100000
+  
+  # Per-user limits
+  user_requests_per_minute: 100
+  user_requests_per_hour: 1000
+  
+  # Per-endpoint limits
+  endpoints:
+    "/api/v1/query":
+      requests_per_minute: 60
+      requests_per_hour: 500
+    "/api/v1/search":
+      requests_per_minute: 100
+      requests_per_hour: 1000
+  
+  # Rate limit storage
+  storage_backend: "redis"
+  redis_url: "${REDIS_URL}"
+
+# Request/Response Processing
+processing:
+  # Request validation
+  validate_requests: true
+  max_query_length: 2000
+  max_results: 100
+  
+  # Response formatting
+  include_metadata: true
+  include_timing: true
+  pretty_json: false
+  
+  # Compression
+  enable_gzip: true
+  gzip_minimum_size: 1000
+
+# Upstream Services
+upstream:
+  # Vector Search Service
+  vector_service:
+    url: "${VECTOR_SERVICE_URL}"
+    timeout_seconds: 30
+    max_retries: 3
+    retry_delay_seconds: 1
+    
+    # Health check
+    health_check_path: "/health"
+    health_check_interval_seconds: 30
+    
+    # Load balancing (if multiple instances)
+    load_balancing: "round_robin"  # Options: round_robin, least_connections, random
+    
+  # RAG Orchestration Service
+  rag_service:
+    url: "${RAG_SERVICE_URL}"
+    timeout_seconds: 120
+    max_retries: 2
+    retry_delay_seconds: 2
+    
+  # Compliance Service
+  compliance_service:
+    url: "${COMPLIANCE_SERVICE_URL}"
+    timeout_seconds: 60
+    max_retries: 3
+    retry_delay_seconds: 1
+
+# Caching
+caching:
+  # Response caching
+  enable_response_cache: true
+  cache_ttl_seconds: 300
+  cache_key_prefix: "neurorag:response:"
+  
+  # Cache invalidation
+  cache_invalidation_enabled: true
+  invalidation_patterns:
+    - "query:*"
+    - "search:*"
+  
+  # Cache storage
+  cache_backend: "redis"
+  redis_url: "${REDIS_URL}"
+  max_cache_size_mb: 1000
+
+# Monitoring & Observability
+monitoring:
+  # Metrics
+  enable_metrics: true
+  metrics_endpoint: "/metrics"
+  metrics_port: 9090
+  
+  # Custom metrics
+  track_request_duration: true
+  track_request_size: true
+  track_response_size: true
+  track_error_rates: true
+  
+  # Distributed tracing
+  tracing_enabled: true
+  tracing_service_name: "neurorag-api-gateway"
+  jaeger_endpoint: "${JAEGER_ENDPOINT}"
+  
+  # Health checks
+  health_endpoint: "/health"
+  readiness_endpoint: "/ready"
+  liveness_endpoint: "/live"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "json"
+  
+  # Log destinations
+  console_enabled: true
+  file_enabled: true
+  file_path: "/logs/api_gateway.log"
+  file_max_size_mb: 100
+  file_backup_count: 5
+  
+  # Request logging
+  log_requests: true
+  log_responses: false  # Set to true for debugging
+  log_request_body: false
+  log_response_body: false
+  
+  # Sensitive data filtering
+  filter_sensitive_data: true
+  sensitive_fields:
+    - "password"
+    - "api_key"
+    - "authorization"
+    - "x-api-key"
+
+# Security
+security:
+  # Request security
+  max_request_size: "10MB"
+  allowed_content_types:
+    - "application/json"
+    - "application/x-www-form-urlencoded"
+    - "multipart/form-data"
+  
+  # Headers
+  security_headers:
+    X-Content-Type-Options: "nosniff"
+    X-Frame-Options: "DENY"
+    X-XSS-Protection: "1; mode=block"
+    Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+  
+  # Input validation
+  validate_json_schema: true
+  sanitize_inputs: true
+  
+  # DDoS protection
+  enable_ddos_protection: true
+  max_connections_per_ip: 100
+  connection_timeout_seconds: 30
+
+# Error Handling
+error_handling:
+  # Error responses
+  include_error_details: false  # Set to true for development
+  include_stack_trace: false
+  
+  # Error codes
+  custom_error_codes:
+    RATE_LIMIT_EXCEEDED: 429
+    INVALID_API_KEY: 401
+    INSUFFICIENT_PERMISSIONS: 403
+    QUERY_TOO_LONG: 400
+    SERVICE_UNAVAILABLE: 503
+  
+  # Retry logic
+  enable_automatic_retries: true
+  max_retries: 3
+  retry_delay_seconds: 1
+  exponential_backoff: true
+
+# Development Settings
+development:
+  debug_mode: false
+  reload_on_change: false
+  
+  # Mock responses
+  enable_mocking: false
+  mock_delay_ms: 100
+  
+  # Testing
+  test_mode: false
+  test_api_key: "test-key-12345"

@@ -1,0 +1,35 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies for vector operations
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libblas-dev \
+    liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install additional vector processing libraries
+RUN pip install faiss-cpu sentence-transformers numpy scipy
+
+# Copy application code
+COPY src/vector_service/ ./src/vector_service/
+COPY config/ ./config/
+
+# Create data directory
+RUN mkdir -p /app/data
+
+# Expose port
+EXPOSE 8001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# Run the vector service
+CMD ["python", "src/vector_service/main.py"]

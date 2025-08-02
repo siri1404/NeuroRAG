@@ -1,0 +1,441 @@
+# NeuroRAG Compliance Rules Configuration
+
+# Data Privacy Rules
+data_privacy:
+  # PII Detection and Redaction
+  pii_detection:
+    enabled: true
+    confidence_threshold: 0.8
+    
+    # PII Types to detect
+    pii_types:
+      - "SSN"           # Social Security Numbers
+      - "CREDIT_CARD"   # Credit Card Numbers
+      - "PHONE"         # Phone Numbers
+      - "EMAIL"         # Email Addresses
+      - "ADDRESS"       # Physical Addresses
+      - "DATE_OF_BIRTH" # Dates of Birth
+      - "BANK_ACCOUNT"  # Bank Account Numbers
+      - "PASSPORT"      # Passport Numbers
+      - "DRIVER_LICENSE" # Driver License Numbers
+    
+    # Redaction patterns
+    redaction_patterns:
+      SSN: "[SSN-REDACTED]"
+      CREDIT_CARD: "[CARD-REDACTED]"
+      PHONE: "[PHONE-REDACTED]"
+      EMAIL: "[EMAIL-REDACTED]"
+      ADDRESS: "[ADDRESS-REDACTED]"
+      DATE_OF_BIRTH: "[DOB-REDACTED]"
+      BANK_ACCOUNT: "[ACCOUNT-REDACTED]"
+      PASSPORT: "[PASSPORT-REDACTED]"
+      DRIVER_LICENSE: "[LICENSE-REDACTED]"
+  
+  # Data Classification
+  classification:
+    enabled: true
+    
+    # Classification levels
+    levels:
+      - name: "public"
+        description: "Publicly available information"
+        access_level: 0
+        retention_days: 2555  # 7 years
+        
+      - name: "confidential"
+        description: "Internal company information"
+        access_level: 1
+        retention_days: 2555  # 7 years
+        
+      - name: "restricted"
+        description: "Highly sensitive information"
+        access_level: 2
+        retention_days: 1825  # 5 years
+        
+      - name: "secret"
+        description: "Top secret information"
+        access_level: 3
+        retention_days: 1095  # 3 years
+    
+    # Auto-classification rules
+    auto_classification:
+      enabled: true
+      rules:
+        - pattern: "(?i)(revenue|profit|earnings|financial)"
+          classification: "confidential"
+        - pattern: "(?i)(salary|compensation|personal)"
+          classification: "restricted"
+        - pattern: "(?i)(merger|acquisition|strategic)"
+          classification: "secret"
+
+# Regulatory Compliance
+regulatory:
+  # GDPR Compliance
+  gdpr:
+    enabled: true
+    
+    # Data subject rights
+    right_to_access: true
+    right_to_rectification: true
+    right_to_erasure: true
+    right_to_portability: true
+    right_to_object: true
+    
+    # Consent management
+    require_explicit_consent: true
+    consent_expiry_days: 365
+    
+    # Data processing lawful basis
+    lawful_basis:
+      - "consent"
+      - "legitimate_interest"
+      - "contract"
+  
+  # CCPA Compliance
+  ccpa:
+    enabled: true
+    
+    # Consumer rights
+    right_to_know: true
+    right_to_delete: true
+    right_to_opt_out: true
+    right_to_non_discrimination: true
+    
+    # Sale of personal information
+    sell_personal_info: false
+    opt_out_required: true
+  
+  # FINRA Compliance (Financial Industry)
+  finra:
+    enabled: true
+    
+    # Record keeping requirements
+    record_retention_years: 7
+    communication_monitoring: true
+    
+    # Supervision requirements
+    supervisory_review: true
+    exception_reporting: true
+    
+    # Books and records
+    maintain_books_records: true
+    audit_trail_required: true
+  
+  # SOX Compliance (Sarbanes-Oxley)
+  sox:
+    enabled: true
+    
+    # Internal controls
+    internal_controls_testing: true
+    management_assessment: true
+    
+    # Financial reporting
+    accurate_financial_records: true
+    disclosure_controls: true
+
+# Audit and Logging
+audit:
+  # Audit logging
+  enabled: true
+  
+  # Events to audit
+  audit_events:
+    - "query_submitted"
+    - "data_accessed"
+    - "pii_detected"
+    - "classification_applied"
+    - "user_authentication"
+    - "permission_denied"
+    - "data_exported"
+    - "configuration_changed"
+  
+  # Audit log format
+  log_format: "json"
+  include_request_body: false
+  include_response_body: false
+  include_user_agent: true
+  include_ip_address: true
+  
+  # Audit log storage
+  storage:
+    backend: "database"  # Options: database, file, s3, azure_blob
+    retention_days: 2555  # 7 years
+    encryption_enabled: true
+    
+  # Audit log integrity
+  integrity_checks: true
+  digital_signatures: true
+  tamper_detection: true
+
+# Access Control
+access_control:
+  # Role-based access control (RBAC)
+  rbac:
+    enabled: true
+    
+    # Roles
+    roles:
+      - name: "admin"
+        permissions:
+          - "read_all"
+          - "write_all"
+          - "delete_all"
+          - "manage_users"
+          - "view_audit_logs"
+          - "export_data"
+        
+      - name: "analyst"
+        permissions:
+          - "read_public"
+          - "read_confidential"
+          - "query_data"
+          - "view_reports"
+        
+      - name: "viewer"
+        permissions:
+          - "read_public"
+          - "query_data"
+        
+      - name: "compliance_officer"
+        permissions:
+          - "read_all"
+          - "view_audit_logs"
+          - "manage_compliance"
+          - "export_audit_data"
+  
+  # Attribute-based access control (ABAC)
+  abac:
+    enabled: true
+    
+    # Attributes
+    attributes:
+      - name: "department"
+        values: ["finance", "legal", "hr", "it", "operations"]
+      - name: "clearance_level"
+        values: ["public", "confidential", "restricted", "secret"]
+      - name: "location"
+        values: ["us", "eu", "apac"]
+    
+    # Access policies
+    policies:
+      - name: "department_access"
+        rule: "user.department == resource.department"
+      - name: "clearance_access"
+        rule: "user.clearance_level >= resource.classification_level"
+      - name: "location_access"
+        rule: "user.location == resource.location OR resource.location == 'global'"
+
+# Data Loss Prevention (DLP)
+dlp:
+  enabled: true
+  
+  # Content inspection
+  content_inspection:
+    enabled: true
+    scan_queries: true
+    scan_responses: true
+    
+  # DLP rules
+  rules:
+    - name: "prevent_ssn_exposure"
+      pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+      action: "block"
+      severity: "high"
+      
+    - name: "prevent_credit_card_exposure"
+      pattern: "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+      action: "redact"
+      severity: "high"
+      
+    - name: "detect_financial_data"
+      pattern: "(?i)(revenue|profit|earnings)\\s*[:=]?\\s*\\$?[\\d,]+\\.?\\d*"
+      action: "flag"
+      severity: "medium"
+  
+  # Actions
+  actions:
+    block:
+      enabled: true
+      return_error: true
+      log_incident: true
+      
+    redact:
+      enabled: true
+      replacement_text: "[REDACTED]"
+      log_incident: true
+      
+    flag:
+      enabled: true
+      notify_admin: true
+      log_incident: true
+
+# Explainability and Transparency
+explainability:
+  # AI Explainability
+  enabled: true
+  
+  # Explanation methods
+  methods:
+    lime:
+      enabled: true
+      num_features: 10
+      num_samples: 1000
+      
+    shap:
+      enabled: false  # Disabled by default due to performance impact
+      explainer_type: "tree"
+      
+    attention:
+      enabled: true
+      visualize_attention: true
+  
+  # Explanation requirements
+  requirements:
+    always_explain: false
+    explain_on_request: true
+    explain_high_risk: true
+    
+  # Explanation storage
+  store_explanations: true
+  explanation_retention_days: 365
+
+# Risk Assessment
+risk_assessment:
+  enabled: true
+  
+  # Risk factors
+  factors:
+    - name: "data_sensitivity"
+      weight: 0.4
+      
+    - name: "user_access_level"
+      weight: 0.3
+      
+    - name: "query_complexity"
+      weight: 0.2
+      
+    - name: "historical_violations"
+      weight: 0.1
+  
+  # Risk thresholds
+  thresholds:
+    low: 0.3
+    medium: 0.6
+    high: 0.8
+  
+  # Risk-based actions
+  actions:
+    low_risk:
+      - "allow"
+      
+    medium_risk:
+      - "allow"
+      - "log_detailed"
+      - "require_explanation"
+      
+    high_risk:
+      - "require_approval"
+      - "enhanced_logging"
+      - "mandatory_explanation"
+      - "notify_compliance_team"
+
+# Incident Response
+incident_response:
+  enabled: true
+  
+  # Incident types
+  incident_types:
+    - name: "data_breach"
+      severity: "critical"
+      response_time_minutes: 15
+      
+    - name: "unauthorized_access"
+      severity: "high"
+      response_time_minutes: 30
+      
+    - name: "policy_violation"
+      severity: "medium"
+      response_time_minutes: 60
+      
+    - name: "system_anomaly"
+      severity: "low"
+      response_time_minutes: 240
+  
+  # Notification settings
+  notifications:
+    email_enabled: true
+    sms_enabled: true
+    slack_enabled: true
+    
+    # Recipients
+    recipients:
+      critical:
+        - "ciso@company.com"
+        - "legal@company.com"
+        - "ceo@company.com"
+      high:
+        - "security@company.com"
+        - "compliance@company.com"
+      medium:
+        - "it-security@company.com"
+      low:
+        - "monitoring@company.com"
+  
+  # Automated responses
+  automated_responses:
+    enabled: true
+    
+    actions:
+      - trigger: "multiple_failed_auth"
+        action: "temporary_account_lock"
+        duration_minutes: 30
+        
+      - trigger: "suspicious_query_pattern"
+        action: "rate_limit_user"
+        duration_minutes: 60
+        
+      - trigger: "data_exfiltration_detected"
+        action: "block_user_immediately"
+        notify_immediately: true
+
+# Monitoring and Alerting
+monitoring:
+  enabled: true
+  
+  # Compliance metrics
+  metrics:
+    - name: "pii_detection_rate"
+      threshold: 0.95
+      
+    - name: "false_positive_rate"
+      threshold: 0.05
+      
+    - name: "audit_log_completeness"
+      threshold: 0.99
+      
+    - name: "policy_violation_rate"
+      threshold: 0.01
+  
+  # Alerts
+  alerts:
+    enabled: true
+    
+    # Alert channels
+    channels:
+      - "email"
+      - "slack"
+      - "pagerduty"
+    
+    # Alert rules
+    rules:
+      - name: "high_pii_detection"
+        condition: "pii_detections_per_hour > 100"
+        severity: "warning"
+        
+      - name: "compliance_violation"
+        condition: "policy_violations_per_day > 10"
+        severity: "critical"
+        
+      - name: "audit_log_failure"
+        condition: "audit_log_errors_per_hour > 5"
+        severity: "high"

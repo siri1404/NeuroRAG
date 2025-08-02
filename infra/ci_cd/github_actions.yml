@@ -1,0 +1,472 @@
+# NeuroRAG CI/CD Pipeline - GitHub Actions
+name: NeuroRAG CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: neuroragacr.azurecr.io
+  AZURE_RESOURCE_GROUP: neurorag-rg
+  AZURE_AKS_CLUSTER: neurorag-aks
+
+jobs:
+  # Code Quality and Security Checks
+  code-quality:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install black isort flake8 mypy bandit safety
+
+    - name: Code formatting check (Black)
+      run: black --check --diff src/
+
+    - name: Import sorting check (isort)
+      run: isort --check-only --diff src/
+
+    - name: Linting (flake8)
+      run: flake8 src/ --max-line-length=100 --ignore=E203,W503
+
+    - name: Type checking (mypy)
+      run: mypy src/ --ignore-missing-imports
+
+    - name: Security scan (Bandit)
+      run: bandit -r src/ -f json -o bandit-report.json
+      continue-on-error: true
+
+    - name: Dependency vulnerability scan (Safety)
+      run: safety check --json --output safety-report.json
+      continue-on-error: true
+
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  # C++ Build and Test
+  cpp-build-test:
+    name: C++ Build & Test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install C++ dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libblas-dev \
+          liblapack-dev \
+          libhiredis-dev \
+          libnlohmann-json3-dev \
+          libgtest-dev \
+          pkg-config
+
+    - name: Install FAISS
+      run: |
+        git clone https://github.com/facebookresearch/faiss.git
+        cd faiss
+        cmake -B build -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=OFF
+        make -C build -j$(nproc)
+        sudo make -C build install
+
+    - name: Build C++ vector service
+      run: |
+        cd src/vector_service
+        mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+
+    - name: Run C++ tests
+      run: |
+        cd src/vector_service/build
+        ctest --output-on-failure
+
+    - name: Run C++ benchmarks
+      run: |
+        cd src/vector_service/build
+        ./vector_service_benchmark --benchmark_format=json > benchmark_results.json
+
+    - name: Upload C++ artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: cpp-artifacts
+        path: |
+          src/vector_service/build/vector_service
+          src/vector_service/build/benchmark_results.json
+
+  # Python Tests
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio
+
+    - name: Run unit tests
+      run: |
+        pytest src/tests/ -v --cov=src --cov-report=xml --cov-report=html
+      env:
+        REDIS_URL: redis://localhost:6379
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-reports
+        path: |
+          coverage.xml
+          htmlcov/
+
+  # Integration Tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [cpp-build-test, python-tests]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: neurorag_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download C++ artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: cpp-artifacts
+        path: ./artifacts
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Start vector service
+      run: |
+        chmod +x ./artifacts/vector_service
+        ./artifacts/vector_service &
+        sleep 10
+      env:
+        REDIS_URL: redis://localhost:6379
+
+    - name: Run integration tests
+      run: |
+        pytest src/tests/integration/ -v
+      env:
+        REDIS_URL: redis://localhost:6379
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/neurorag_test
+        VECTOR_SERVICE_URL: http://localhost:8001
+
+  # Performance Tests
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download C++ artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: cpp-artifacts
+        path: ./artifacts
+
+    - name: Run performance benchmarks
+      run: |
+        chmod +x ./artifacts/vector_service
+        python scripts/benchmark_vector_search.py \
+          --duration 300 \
+          --threads 16 \
+          --output performance_results/
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-results
+        path: performance_results/
+
+  # Build Docker Images
+  build-images:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [code-quality, cpp-build-test, python-tests]
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.REGISTRY }}
+        username: ${{ secrets.AZURE_CLIENT_ID }}
+        password: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/neurorag
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+
+    - name: Build and push API Gateway image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: src/api_gateway/Dockerfile
+        push: true
+        tags: ${{ env.REGISTRY }}/neurorag/api-gateway:${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push Vector Service image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: src/vector_service/Dockerfile
+        push: true
+        tags: ${{ env.REGISTRY }}/neurorag/vector-service:${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push RAG Orchestration image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: src/rag_orchestration/Dockerfile
+        push: true
+        tags: ${{ env.REGISTRY }}/neurorag/rag-orchestrator:${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Security Scanning
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [build-images]
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/neurorag/api-gateway:${{ needs.build-images.outputs.image-tag }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-images, security-scan]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: Get AKS credentials
+      run: |
+        az aks get-credentials \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_AKS_CLUSTER }}-staging
+
+    - name: Deploy to staging
+      run: |
+        helm upgrade --install neurorag-staging ./infra/helm_charts/neurorag \
+          --namespace neurorag-staging \
+          --create-namespace \
+          --set image.tag=${{ needs.build-images.outputs.image-tag }} \
+          --set environment=staging \
+          --values ./infra/helm_charts/neurorag/values-staging.yaml
+
+    - name: Run smoke tests
+      run: |
+        kubectl wait --for=condition=ready pod -l app=neurorag-api-gateway -n neurorag-staging --timeout=300s
+        python scripts/smoke_tests.py --environment staging
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-images, security-scan, deploy-staging]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: Get AKS credentials
+      run: |
+        az aks get-credentials \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_AKS_CLUSTER }}
+
+    - name: Deploy to production
+      run: |
+        helm upgrade --install neurorag ./infra/helm_charts/neurorag \
+          --namespace neurorag \
+          --create-namespace \
+          --set image.tag=${{ needs.build-images.outputs.image-tag }} \
+          --set environment=production \
+          --values ./infra/helm_charts/neurorag/values-production.yaml
+
+    - name: Run production health checks
+      run: |
+        kubectl wait --for=condition=ready pod -l app=neurorag-api-gateway -n neurorag --timeout=600s
+        python scripts/health_checks.py --environment production
+
+    - name: Update deployment status
+      run: |
+        echo "Deployment completed successfully"
+        echo "Image: ${{ needs.build-images.outputs.image-tag }}"
+        echo "Digest: ${{ needs.build-images.outputs.image-digest }}"
+
+  # Cleanup
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    
+    steps:
+    - name: Clean up old images
+      run: |
+        # Keep only the last 10 images
+        az acr repository show-tags \
+          --name neuroragacr \
+          --repository neurorag/api-gateway \
+          --orderby time_desc \
+          --output tsv \
+          | tail -n +11 \
+          | xargs -I {} az acr repository delete \
+            --name neuroragacr \
+            --image neurorag/api-gateway:{} \
+            --yes
+
+  # Notification
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    
+    steps:
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#neurorag-deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

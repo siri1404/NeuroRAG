@@ -1,0 +1,71 @@
+# Docker Compose Override for Development
+# This file extends docker-compose.yml with development-specific settings
+
+version: '3.8'
+
+services:
+  # Development overrides for API Gateway
+  api-gateway:
+    volumes:
+      - ./src/api_gateway:/app/src/api_gateway
+      - ./config:/app/config
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # Debug port
+
+  # Development overrides for Vector Service
+  vector-service:
+    volumes:
+      - ./src/vector_service:/app/src/vector_service
+      - ./data:/data
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "8001:8001"
+      - "9001:9001"  # Debug port
+
+  # Development database
+  postgres-dev:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: neurorag_dev
+      POSTGRES_USER: neurorag
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+
+  # Development Redis with persistence disabled for faster restarts
+  redis:
+    command: redis-server --appendonly no --save ""
+    ports:
+      - "6379:6379"
+
+  # Jupyter notebook for data exploration
+  jupyter:
+    image: jupyter/scipy-notebook:latest
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./data:/home/jovyan/data
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+
+  # Development tools
+  adminer:
+    image: adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres-dev
+
+volumes:
+  postgres_dev_data:
